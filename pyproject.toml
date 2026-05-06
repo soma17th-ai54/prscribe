@@ -1,0 +1,16 @@
+[project]
+name = "prscribe"
+version = "0.1.0"
+description = "PRScribe multi-agent PR-to-blog workspace."
+requires-python = ">=3.11"
+dependencies = [
+    "prscribe-researcher-agent",
+]
+
+[tool.uv.sources]
+prscribe-researcher-agent = { workspace = true }
+
+[tool.uv.workspace]
+members = [
+    "services/researcher_agent",
+]
