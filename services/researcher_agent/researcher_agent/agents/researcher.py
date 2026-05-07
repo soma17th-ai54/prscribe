@@ -46,6 +46,18 @@ Use unified diff semantics: lines starting with + are added and lines starting w
 Return valid JSON only, matching ResearchResult.
 """
 
+SELF_EVAL_SYSTEM_PROMPT = """You are the verifier persona for the PRScribe Researcher Agent (a separate persona from the extractor).
+
+Score the extractor's ResearchResult on four independent dimensions, G-Eval style:
+- Write a 1-2 sentence rationale FIRST, then derive the scores.
+- coverage (0.0-1.0): fraction of changed files/functions that appear in facts. A deterministic value is supplied; review and adjust only if you see clear evidence it is wrong.
+- groundedness (0.0-1.0): every fact must be traceable via source_locator. A deterministic value is supplied; lower it only if statements look speculative or unsupported.
+- chunk_quality (1-5): are search_chunks.keywords identifiable, distinctive terms (good) or generic words like "fix", "update", "code" (bad)?
+- confidence (1-5): overall trust in the extraction.
+
+Return valid JSON only, matching ResearcherSelfEval. Do not regenerate the extraction itself.
+"""
+
 
 class ResearcherError(RuntimeError):
     """Raised when Researcher Agent execution fails."""
@@ -320,7 +332,7 @@ def _fallback_chunks(raw: RawPRData) -> list[SearchChunk]:
     return chunks
 
 
-def _self_eval(raw: RawPRData, result: ResearchResult) -> ResearcherSelfEval:
+def _compute_deterministic_metrics(raw: RawPRData, result: ResearchResult) -> dict[str, float]:
     file_paths = {file.path for file in raw.files}
     fact_files = {
         file.path
@@ -329,14 +341,77 @@ def _self_eval(raw: RawPRData, result: ResearchResult) -> ResearcherSelfEval:
     }
     coverage = len(fact_files) / len(file_paths) if file_paths else 1.0
     grounded = sum(1 for fact in result.facts if fact.source_locator) / len(result.facts) if result.facts else 0.0
-    chunk_quality = 4 if all(len(chunk.keywords) >= 3 for chunk in result.search_chunks) else 3
-    confidence = 4 if coverage >= 0.8 and grounded >= 0.8 else 3
+    return {"coverage": round(coverage, 2), "groundedness": round(grounded, 2)}
+
+
+def _deterministic_self_eval(raw: RawPRData, result: ResearchResult) -> ResearcherSelfEval:
+    metrics = _compute_deterministic_metrics(raw, result)
+    chunk_quality = 4 if result.search_chunks and all(len(chunk.keywords) >= 3 for chunk in result.search_chunks) else 3
+    confidence = 4 if metrics["coverage"] >= 0.8 and metrics["groundedness"] >= 0.8 else 3
     return ResearcherSelfEval(
-        coverage=round(coverage, 2),
-        groundedness=round(grounded, 2),
+        coverage=metrics["coverage"],
+        groundedness=metrics["groundedness"],
         chunk_quality=chunk_quality,
         confidence=confidence,
         rationale="Deterministic self-evaluation based on changed-file coverage, source locators, and keyword count.",
+    )
+
+
+def build_self_eval_prompt(raw: RawPRData, result: ResearchResult, metrics: dict[str, float]) -> str:
+    payload = {
+        "deterministic_metrics": metrics,
+        "changed_files": [file.path for file in raw.files],
+        "changed_functions": [item.model_dump(mode="json") for item in result.changed_functions],
+        "facts": [item.model_dump(mode="json") for item in result.facts],
+        "search_chunks": [item.model_dump(mode="json") for item in result.search_chunks],
+        "notes": result.notes,
+        "output_schema": ResearcherSelfEval.model_json_schema(),
+    }
+    return f"""Score this ResearchResult and return ResearcherSelfEval JSON.
+
+Begin the rationale with a 1-2 sentence reasoning, then assign scores consistent with that reasoning.
+Treat deterministic_metrics.coverage and deterministic_metrics.groundedness as ground truth unless you can cite specific contradicting evidence.
+Judge chunk_quality strictly: generic words like "fix", "update", "code", or the PR title alone are weak; identifier-level or domain terms are strong.
+
+Input:
+{json.dumps(payload, ensure_ascii=False)}
+"""
+
+
+def call_solar_for_self_eval(raw: RawPRData, result: ResearchResult, metrics: dict[str, float]) -> dict[str, Any]:
+    completion = _solar_client().chat.completions.create(
+        model=_solar_model(),
+        messages=[
+            {"role": "system", "content": SELF_EVAL_SYSTEM_PROMPT},
+            {"role": "user", "content": build_self_eval_prompt(raw, result, metrics)},
+        ],
+        temperature=0,
+    )
+    content = completion.choices[0].message.content
+    if not content:
+        raise ResearcherError("Solar returned an empty ResearcherSelfEval.")
+    return _parse_json_object(content)
+
+
+def _self_eval(raw: RawPRData, result: ResearchResult) -> ResearcherSelfEval:
+    metrics = _compute_deterministic_metrics(raw, result)
+    try:
+        candidate = call_solar_for_self_eval(raw, result, metrics)
+    except ResearcherConfigError:
+        raise
+    except (json.JSONDecodeError, ValidationError, ResearcherError, OpenAIError):
+        return _deterministic_self_eval(raw, result)
+
+    try:
+        llm_eval = ResearcherSelfEval.model_validate(candidate)
+    except ValidationError:
+        return _deterministic_self_eval(raw, result)
+
+    return llm_eval.model_copy(
+        update={
+            "coverage": metrics["coverage"],
+            "groundedness": metrics["groundedness"],
+        }
     )
 
 
@@ -351,7 +426,7 @@ def _fallback_result(raw: RawPRData, notes: list[str] | None = None) -> Research
         search_chunks=_fallback_chunks(raw),
         notes=notes or [],
     )
-    result.self_eval = _self_eval(raw, result)
+    result.self_eval = _deterministic_self_eval(raw, result)
     return result
 
 
@@ -454,8 +529,7 @@ def extract_research_result(
         try:
             candidate = call_solar_for_research(raw, tool_results, retry_instruction)
             result = ResearchResult.model_validate(_normalize_result(candidate, raw, notes))
-            if result.self_eval is None:
-                result.self_eval = _self_eval(raw, result)
+            result.self_eval = _self_eval(raw, result)
             return result
         except ResearcherConfigError:
             raise

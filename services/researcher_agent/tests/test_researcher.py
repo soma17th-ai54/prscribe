@@ -128,8 +128,70 @@ def test_extract_research_result_fills_empty_search_chunks(monkeypatch: pytest.M
         return fallback
 
     monkeypatch.setattr(researcher, "call_solar_for_research", fake_solar)
+    monkeypatch.setattr(
+        researcher,
+        "call_solar_for_self_eval",
+        lambda raw, result, metrics: {
+            "coverage": metrics["coverage"],
+            "groundedness": metrics["groundedness"],
+            "chunk_quality": 4,
+            "confidence": 4,
+            "rationale": "stubbed",
+        },
+    )
 
     result = researcher.extract_research_result(raw_pr())
 
     assert result.search_chunks
     assert "search_chunks" in result.notes[0]
+
+
+def test_self_eval_uses_llm_scores_for_chunk_quality_and_confidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    base = researcher._fallback_result(raw_pr())
+    monkeypatch.setattr(
+        researcher,
+        "call_solar_for_self_eval",
+        lambda raw, result, metrics: {
+            "coverage": 0.0,
+            "groundedness": 0.0,
+            "chunk_quality": 5,
+            "confidence": 5,
+            "rationale": "Identifier-level keywords present; facts grounded via source_locator.",
+        },
+    )
+
+    eval_result = researcher._self_eval(raw_pr(), base)
+
+    assert eval_result.chunk_quality == 5
+    assert eval_result.confidence == 5
+    assert eval_result.rationale.startswith("Identifier-level")
+    deterministic = researcher._compute_deterministic_metrics(raw_pr(), base)
+    assert eval_result.coverage == deterministic["coverage"]
+    assert eval_result.groundedness == deterministic["groundedness"]
+
+
+def test_self_eval_falls_back_when_llm_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    base = researcher._fallback_result(raw_pr())
+
+    def boom(*args, **kwargs):
+        raise researcher.ResearcherError("solar down")
+
+    monkeypatch.setattr(researcher, "call_solar_for_self_eval", boom)
+
+    eval_result = researcher._self_eval(raw_pr(), base)
+
+    assert "Deterministic" in eval_result.rationale
+    assert eval_result.chunk_quality in (3, 4)
+
+
+def test_self_eval_falls_back_on_invalid_llm_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    base = researcher._fallback_result(raw_pr())
+    monkeypatch.setattr(
+        researcher,
+        "call_solar_for_self_eval",
+        lambda raw, result, metrics: {"chunk_quality": 99, "confidence": 5, "rationale": "out of range"},
+    )
+
+    eval_result = researcher._self_eval(raw_pr(), base)
+
+    assert "Deterministic" in eval_result.rationale
