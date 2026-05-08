@@ -23,7 +23,8 @@ async def run_self_eval(
 ) -> Optional[ContextSelfEval]:
     """ContextSelfEval 생성. 실패 시 None 반환 (노드 자체는 정상 반환)."""
     try:
-        llm = get_solar_mini().with_structured_output(ContextSelfEval)
+        # solar-mini는 json_mode 사용 (parse() 미지원)
+        llm = get_solar_mini().with_structured_output(ContextSelfEval, method="json_mode")
 
         domains = list({
             r.url.split("/")[2]

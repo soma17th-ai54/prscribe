@@ -25,7 +25,10 @@ _VERIFY_SYSTEM_PROMPT = """당신은 문서 발췌문이 PR 사실과 일치하�
 - unrelated: 발췌문이 PR 사실과 주제 자체가 다르다
 - needs_review: 관련은 있으나 일치/모순 판단이 불분명하다
 
-reasoning은 1~3문장으로 판단 근거를 설명한다."""
+reasoning은 1~3문장으로 판단 근거를 설명한다.
+
+반드시 다음 JSON 형식으로만 응답하세요:
+{"verdict": "consistent|contradicts|unrelated|needs_review", "reasoning": "판단 근거"}"""
 
 
 class _VerifyOutput(BaseModel):
@@ -34,7 +37,8 @@ class _VerifyOutput(BaseModel):
 
 
 async def _compare_impl(excerpt: str, facts: list[str]) -> _VerifyOutput:
-    llm = get_solar_mini().with_structured_output(_VerifyOutput)
+    # solar-mini는 with_structured_output default(parse)를 지원하지 않으므로 json_mode 사용
+    llm = get_solar_mini().with_structured_output(_VerifyOutput, method="json_mode")
     facts_text = "\n".join(f"- {f}" for f in facts)
     result = await llm.ainvoke([
         SystemMessage(content=_VERIFY_SYSTEM_PROMPT),
