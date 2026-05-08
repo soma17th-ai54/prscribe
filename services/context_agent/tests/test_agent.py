@@ -9,6 +9,9 @@ def make_research_result():
     return ResearchResult(
         pr_identifier="owner/repo#1",
         summary_one_line="Fix N+1 with select_related",
+        changed_files=[],
+        changed_functions=[],
+        tech_stack_hints=[],
         facts=[
             FactBullet(
                 statement="PR uses select_related() for N+1 fix",
@@ -81,6 +84,9 @@ async def test_parallel_chunks_use_semaphore():
     research = ResearchResult(
         pr_identifier="owner/repo#2",
         summary_one_line="test",
+        changed_files=[],
+        changed_functions=[],
+        tech_stack_hints=[],
         facts=[],
         search_chunks=chunks,
     )

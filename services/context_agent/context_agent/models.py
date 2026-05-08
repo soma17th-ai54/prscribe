@@ -2,44 +2,13 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
-# ── Researcher Agent 스키마 stub ──────────────────────────────────────────────
-# PR #2 (feat/researcher-agent) merge 후 아래 import로 교체:
-#   from researcher_agent.schemas.research import (
-#       FactBullet, SearchChunk, ResearchResult
-#   )
-
-
-class FactBullet(BaseModel):
-    statement: str
-    source: Literal["diff", "commit_message", "linked_issue"]
-    source_locator: str
-
-
-class SearchChunk(BaseModel):
-    chunk_id: str
-    keywords: list[str]
-    intent: Literal["concept_lookup", "api_usage", "best_practice", "error_or_pitfall"]
-    related_files: list[str] = Field(default_factory=list)
-
-    @field_validator("keywords")
-    @classmethod
-    def keywords_should_be_useful(cls, value: list[str]) -> list[str]:
-        if not value:
-            raise ValueError("search chunk keywords must not be empty")
-        return value[:7]
-
-
-class ResearchResult(BaseModel):
-    """PR #2 merge 후 researcher_agent.schemas.research.ResearchResult로 교체."""
-    pr_identifier: str
-    summary_one_line: str = ""
-    facts: list[FactBullet] = Field(default_factory=list)
-    search_chunks: list[SearchChunk] = Field(default_factory=list)
-
-
-# ── Context Agent 전용 스키마 ────────────────────────────────────────────────
+from researcher_agent.schemas.research import (  # noqa: F401 — re-exported for internal use
+    FactBullet,
+    ResearchResult,
+    SearchChunk,
+)
 
 
 class Reference(BaseModel):

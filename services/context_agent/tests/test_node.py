@@ -10,6 +10,9 @@ def _make_research():
     return ResearchResult(
         pr_identifier="owner/repo#42",
         summary_one_line="Fix N+1",
+        changed_files=[],
+        changed_functions=[],
+        tech_stack_hints=[],
         facts=[FactBullet(statement="uses select_related", source="diff", source_locator="L1")],
         search_chunks=[SearchChunk(chunk_id="c1", keywords=["django"], intent="best_practice")],
     )
