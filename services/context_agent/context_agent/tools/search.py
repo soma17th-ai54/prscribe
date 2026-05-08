@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import httpx
 from bs4 import BeautifulSoup
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 from langchain_core.tools import tool
 
 

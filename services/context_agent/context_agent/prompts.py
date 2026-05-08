@@ -43,4 +43,6 @@ SELF_EVAL_SYSTEM_PROMPT = """당신은 외부 컨텍스트 검색 결과를 채�
 
 [유의]
 - 평가만 합니다. 자신의 검색을 다시 만들지 마세요.
-- 점수가 낮아도 시스템 행동에 영향 없음 — 보고용."""
+- 점수가 낮아도 시스템 행동에 영향 없음 — 보고용.
+
+반드시 JSON 형식으로만 응답하세요: {"coverage": float, "relevance": int, "diversity": int, "confidence": int, "rationale": str}"""

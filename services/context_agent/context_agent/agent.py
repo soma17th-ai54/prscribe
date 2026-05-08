@@ -65,16 +65,16 @@ async def _run_chunk_react(
         agent = create_react_agent(
             model=get_solar_pro(),
             tools=[context7_search, web_search, fetch_url, compare_text_to_facts, finish, give_up],
-            state_modifier=REACT_SYSTEM_PROMPT,
+            prompt=REACT_SYSTEM_PROMPT,
         )
         prompt = _build_chunk_prompt(chunk, facts)
         try:
             result = await asyncio.wait_for(
                 agent.ainvoke(
                     {"messages": [HumanMessage(content=prompt)]},
-                    config={"recursion_limit": 6},
+                    config={"recursion_limit": 20},
                 ),
-                timeout=12.0,
+                timeout=90.0,
             )
             refs = _parse_finish_output(result["messages"], chunk.chunk_id)
             log = [
