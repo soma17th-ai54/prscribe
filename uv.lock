@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 members = [
     "prscribe",
     "prscribe-context-agent",
+    "prscribe-orchestration",
     "prscribe-researcher-agent",
 ]
 
@@ -773,12 +774,14 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "prscribe-context-agent" },
+    { name = "prscribe-orchestration" },
     { name = "prscribe-researcher-agent" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "prscribe-context-agent", editable = "services/context_agent" },
+    { name = "prscribe-orchestration", editable = "services/orchestration" },
     { name = "prscribe-researcher-agent", editable = "services/researcher_agent" },
 ]
 
@@ -814,6 +817,37 @@ requires-dist = [
     { name = "openai", specifier = ">=2.0.0" },
     { name = "prscribe-researcher-agent", editable = "services/researcher_agent" },
     { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23.0" },
+]
+
+[[package]]
+name = "prscribe-orchestration"
+version = "0.1.0"
+source = { editable = "services/orchestration" }
+dependencies = [
+    { name = "langgraph" },
+    { name = "prscribe-context-agent" },
+    { name = "prscribe-researcher-agent" },
+    { name = "python-dotenv" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "langgraph", specifier = ">=1.0.0" },
+    { name = "prscribe-context-agent", editable = "services/context_agent" },
+    { name = "prscribe-researcher-agent", editable = "services/researcher_agent" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
 ]
 
