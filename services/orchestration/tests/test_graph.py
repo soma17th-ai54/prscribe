@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from orchestration.graph import context_node, researcher_node
+from orchestration.graph import context_node, researcher_node, writer_node
 from orchestration.state import GraphState
 
 
@@ -71,6 +71,55 @@ async def test_context_node_missing_research():
     state: GraphState = {"errors": []}
     result = await context_node(state)
 
+    assert "errors" in result
+    assert any("research" in e for e in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_writer_node_full_mode():
+    mock_draft = MagicMock()
+    mock_draft.model_dump.return_value = {"title": "Test Post", "full_markdown": "# Hello"}
+    mock_result = MagicMock()
+    mock_result.draft = mock_draft
+    mock_result.verifications = []
+
+    with patch("orchestration.graph.run_writer_pipeline", return_value=mock_result):
+        state: GraphState = {
+            "research": _make_research_dict(),
+            "context": {"coverage": 0.8},
+            "errors": [],
+        }
+        result = await writer_node(state)
+
+    assert "draft" in result
+    assert result["draft"]["title"] == "Test Post"
+    assert result.get("verifications") == []
+
+
+@pytest.mark.asyncio
+async def test_writer_node_minimal_mode():
+    mock_draft = MagicMock()
+    mock_draft.model_dump.return_value = {"title": "Minimal", "full_markdown": "# Minimal"}
+    mock_result = MagicMock()
+    mock_result.draft = mock_draft
+    mock_result.verifications = []
+
+    with patch("orchestration.graph.run_writer_pipeline", return_value=mock_result) as mock_fn:
+        state: GraphState = {
+            "research": _make_research_dict(),
+            "context": {"coverage": 0.1},
+            "errors": [],
+        }
+        await writer_node(state)
+
+    _, kwargs = mock_fn.call_args
+    assert kwargs.get("mode") == "minimal_context" or mock_fn.call_args[0][2] == "minimal_context"
+
+
+@pytest.mark.asyncio
+async def test_writer_node_missing_research():
+    state: GraphState = {"errors": []}
+    result = await writer_node(state)
     assert "errors" in result
     assert any("research" in e for e in result["errors"])
 
