@@ -5,18 +5,21 @@ description = "PRScribe multi-agent PR-to-blog workspace."
 requires-python = ">=3.11"
 dependencies = [
     "prscribe-researcher-agent",
+    "prscribe-writer-agent",
     "prscribe-context-agent",
     "prscribe-orchestration",
 ]
 
 [tool.uv.sources]
 prscribe-researcher-agent = { workspace = true }
+prscribe-writer-agent = { workspace = true }
 prscribe-context-agent = { workspace = true }
 prscribe-orchestration = { workspace = true }
 
 [tool.uv.workspace]
 members = [
     "services/researcher_agent",
+    "services/writer_agent",
     "services/context_agent",
     "services/orchestration",
 ]
