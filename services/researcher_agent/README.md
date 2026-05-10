@@ -11,8 +11,8 @@ Researcher Agent는 GitHub PR에서 확인 가능한 사실만 추출해 공통 
 ```txt
 GitHub PR/repo URL
 -> deterministic core collector
--> Solar optional tool planning
--> GitHub tool executor
+-> Solar extra-context router
+-> GitHub tool executor (router가 필요하다고 판단한 경우만)
 -> Solar ResearchResult extraction
 -> Pydantic validation + deterministic fallback
 ```
@@ -62,6 +62,13 @@ uv run python -m researcher_agent.cli https://github.com/soma17th-ai54/demo_app 
 uv run python -m researcher_agent.cli https://github.com/OWNER/REPO/pull/1
 ```
 
+Researcher 내부 LangGraph 진행 로그를 로컬에서 확인하려면 `--stream`을 붙입니다.
+로그는 stderr에 JSON Lines로 출력되고, 최종 `ResearchResult`는 stdout에 출력됩니다.
+
+```bash
+uv run python -m researcher_agent.cli https://github.com/OWNER/REPO/pull/1 --stream
+```
+
 ## Python / LangGraph 사용
 
 ```python
@@ -86,6 +93,9 @@ state = {
 result = researcher_graph.invoke(state)
 print(result["research"])
 ```
+
+Streamlit이나 다른 프론트엔드는 `researcher_graph.stream(..., stream_mode="updates")`에서
+각 partial state의 `react_traces`를 읽어 진행 로그로 표시할 수 있습니다.
 
 ## Optional GitHub Tools
 

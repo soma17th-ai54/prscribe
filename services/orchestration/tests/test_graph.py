@@ -67,6 +67,34 @@ async def test_context_node_success():
 
 
 @pytest.mark.asyncio
+async def test_context_node_does_not_echo_existing_react_traces():
+    from context_agent.models import ContextResult
+
+    mock_ctx = ContextResult(
+        pr_identifier="owner/repo#1",
+        raw_references=[],
+        verified_references=[],
+        verification_log=[],
+        coverage=0.5,
+    )
+    existing_trace = [{"node": "researcher", "stage": "core_pr_data"}]
+
+    with patch(
+        "orchestration.graph._context_node",
+        AsyncMock(return_value={"context": mock_ctx, "react_traces": existing_trace}),
+    ):
+        state: GraphState = {
+            "research": _make_research_dict(),
+            "errors": [],
+            "react_traces": existing_trace,
+        }
+        result = await context_node(state)
+
+    assert "context" in result
+    assert "react_traces" not in result
+
+
+@pytest.mark.asyncio
 async def test_context_node_missing_research():
     state: GraphState = {"errors": []}
     result = await context_node(state)

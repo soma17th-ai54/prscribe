@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Any
+import time
+from typing import Any, Callable
 
 from dotenv import load_dotenv
 from openai import OpenAI, OpenAIError
@@ -30,6 +31,7 @@ load_dotenv()
 PATCH_CHAR_LIMIT = 8_000
 MAX_EXTRA_TOOL_REQUESTS = 4
 SOLAR_BASE_URL = "https://api.upstage.ai/v1"
+TraceEmitter = Callable[[dict[str, Any]], None]
 
 EXTRA_CONTEXT_SYSTEM_PROMPT = """You are the tool-planning step of the PRScribe Researcher Agent.
 
@@ -65,6 +67,37 @@ class ResearcherError(RuntimeError):
 
 class ResearcherConfigError(ResearcherError):
     """Raised when required configuration is missing."""
+
+
+def _trace_event(
+    stage: str,
+    status: str,
+    message: str,
+    **metadata: Any,
+) -> dict[str, Any]:
+    return {
+        "node": "researcher",
+        "stage": stage,
+        "status": status,
+        "message": message,
+        "metadata": {key: value for key, value in metadata.items() if value is not None},
+    }
+
+
+def _emit_trace(
+    emit_trace: TraceEmitter | None,
+    stage: str,
+    status: str,
+    message: str,
+    **metadata: Any,
+) -> None:
+    if emit_trace is None:
+        return
+    emit_trace(_trace_event(stage, status, message, **metadata))
+
+
+def _duration_ms(started_at: float) -> int:
+    return int((time.perf_counter() - started_at) * 1000)
 
 
 def _solar_api_key() -> str:
@@ -178,12 +211,41 @@ def _patch_is_complete(bundle: RawPRBundle, path: str) -> bool:
     return False
 
 
-def collect_extra_context(bundle: RawPRBundle) -> tuple[list[GitHubToolResult], list[str]]:
+def plan_extra_context(
+    bundle: RawPRBundle,
+    emit_trace: TraceEmitter | None = None,
+) -> tuple[list[GitHubToolRequest], list[str]]:
+    started_at = time.perf_counter()
+    _emit_trace(
+        emit_trace,
+        "extra_context_router",
+        "started",
+        "Asking LLM router whether optional GitHub context is needed.",
+        pr_identifier=bundle.raw.pr_identifier,
+        changed_files=len(bundle.raw.files),
+    )
     try:
         plan = call_solar_for_extra_context(bundle)
     except ResearcherConfigError:
+        _emit_trace(
+            emit_trace,
+            "extra_context_router",
+            "error",
+            "Extra context planning is missing required LLM configuration.",
+            pr_identifier=bundle.raw.pr_identifier,
+            duration_ms=_duration_ms(started_at),
+        )
         raise
     except (json.JSONDecodeError, ValidationError, ResearcherError, OpenAIError) as exc:
+        _emit_trace(
+            emit_trace,
+            "extra_context_router",
+            "warning",
+            "Extra context planning failed; continuing with core PR data.",
+            pr_identifier=bundle.raw.pr_identifier,
+            error=str(exc),
+            duration_ms=_duration_ms(started_at),
+        )
         return [], [f"extra context planning failed: {exc}"]
 
     requests: list[GitHubToolRequest] = []
@@ -191,11 +253,80 @@ def collect_extra_context(bundle: RawPRBundle) -> tuple[list[GitHubToolResult], 
     for request in plan.requests:
         if request.tool_name == "read_pr_file" and request.path and _patch_is_complete(bundle, request.path):
             notes.append(f"extra context request skipped; patch already complete: {request.path}")
+            _emit_trace(
+                emit_trace,
+                "extra_context_router",
+                "skipped",
+                "Skipped a tool request because the PR patch already contains the needed file context.",
+                pr_identifier=bundle.raw.pr_identifier,
+                tool_name=request.tool_name,
+                path=request.path,
+            )
             continue
         requests.append(request)
     if not requests:
-        return [], notes
-    return execute_github_tool_requests(bundle, requests), notes
+        _emit_trace(
+            emit_trace,
+            "extra_context_router",
+            "completed",
+            "LLM router decided no additional GitHub context is needed.",
+            pr_identifier=bundle.raw.pr_identifier,
+            requested_tools=0,
+            duration_ms=_duration_ms(started_at),
+        )
+        return requests, notes
+
+    _emit_trace(
+        emit_trace,
+        "extra_context_router",
+        "completed",
+        "LLM router selected optional GitHub context tools.",
+        pr_identifier=bundle.raw.pr_identifier,
+        requested_tools=len(requests),
+        tools=[request.tool_name for request in requests],
+        duration_ms=_duration_ms(started_at),
+    )
+    return requests, notes
+
+
+def execute_planned_extra_context(
+    bundle: RawPRBundle,
+    requests: list[GitHubToolRequest],
+    emit_trace: TraceEmitter | None = None,
+) -> list[GitHubToolResult]:
+    if not requests:
+        return []
+    started_at = time.perf_counter()
+    _emit_trace(
+        emit_trace,
+        "extra_context",
+        "running",
+        "Executing optional GitHub context tools.",
+        pr_identifier=bundle.raw.pr_identifier,
+        requested_tools=len(requests),
+        tools=[request.tool_name for request in requests],
+    )
+    results = execute_github_tool_requests(bundle, requests)
+    _emit_trace(
+        emit_trace,
+        "extra_context",
+        "completed",
+        "Optional GitHub context tools completed.",
+        pr_identifier=bundle.raw.pr_identifier,
+        requested_tools=len(requests),
+        ok_results=sum(1 for result in results if result.ok),
+        failed_results=sum(1 for result in results if not result.ok),
+        duration_ms=_duration_ms(started_at),
+    )
+    return results
+
+
+def collect_extra_context(
+    bundle: RawPRBundle,
+    emit_trace: TraceEmitter | None = None,
+) -> tuple[list[GitHubToolResult], list[str]]:
+    requests, notes = plan_extra_context(bundle, emit_trace=emit_trace)
+    return execute_planned_extra_context(bundle, requests, emit_trace=emit_trace), notes
 
 
 def _function_kind(status: str) -> str:
@@ -398,7 +529,7 @@ def _self_eval(raw: RawPRData, result: ResearchResult) -> ResearcherSelfEval:
     try:
         candidate = call_solar_for_self_eval(raw, result, metrics)
     except ResearcherConfigError:
-        raise
+        return _deterministic_self_eval(raw, result)
     except (json.JSONDecodeError, ValidationError, ResearcherError, OpenAIError):
         return _deterministic_self_eval(raw, result)
 
@@ -521,29 +652,169 @@ def extract_research_result(
     raw: RawPRData,
     tool_results: list[GitHubToolResult] | None = None,
     notes: list[str] | None = None,
+    emit_trace: TraceEmitter | None = None,
 ) -> ResearchResult:
+    started_at = time.perf_counter()
     notes = notes or []
     retry_instruction: str | None = None
     last_error: Exception | None = None
-    for _ in range(2):
+    _emit_trace(
+        emit_trace,
+        "research_extraction",
+        "started",
+        "Extracting grounded ResearchResult from PR data.",
+        pr_identifier=raw.pr_identifier,
+        changed_files=len(raw.files),
+        tool_results=len(tool_results or []),
+    )
+    for attempt in range(1, 3):
+        _emit_trace(
+            emit_trace,
+            "research_extraction",
+            "running",
+            "Calling LLM for ResearchResult extraction.",
+            pr_identifier=raw.pr_identifier,
+            attempt=attempt,
+        )
         try:
             candidate = call_solar_for_research(raw, tool_results, retry_instruction)
             result = ResearchResult.model_validate(_normalize_result(candidate, raw, notes))
+            _emit_trace(
+                emit_trace,
+                "research_extraction",
+                "validated",
+                "ResearchResult passed schema validation.",
+                pr_identifier=raw.pr_identifier,
+                attempt=attempt,
+                facts=len(result.facts),
+                search_chunks=len(result.search_chunks),
+            )
+            _emit_trace(
+                emit_trace,
+                "self_eval",
+                "started",
+                "Scoring ResearchResult quality.",
+                pr_identifier=raw.pr_identifier,
+            )
             result.self_eval = _self_eval(raw, result)
+            _emit_trace(
+                emit_trace,
+                "self_eval",
+                "completed",
+                "Researcher self-evaluation completed.",
+                pr_identifier=raw.pr_identifier,
+                confidence=result.self_eval.confidence if result.self_eval else None,
+                coverage=result.self_eval.coverage if result.self_eval else None,
+                groundedness=result.self_eval.groundedness if result.self_eval else None,
+            )
+            _emit_trace(
+                emit_trace,
+                "research_extraction",
+                "completed",
+                "ResearchResult extraction completed.",
+                pr_identifier=raw.pr_identifier,
+                facts=len(result.facts),
+                search_chunks=len(result.search_chunks),
+                duration_ms=_duration_ms(started_at),
+            )
             return result
-        except ResearcherConfigError:
+        except ResearcherConfigError as exc:
+            _emit_trace(
+                emit_trace,
+                "research_extraction",
+                "error",
+                "Research extraction is missing required LLM configuration.",
+                pr_identifier=raw.pr_identifier,
+                attempt=attempt,
+                error=str(exc),
+                duration_ms=_duration_ms(started_at),
+            )
             raise
         except (json.JSONDecodeError, ValidationError, ResearcherError, OpenAIError) as exc:
             last_error = exc
+            _emit_trace(
+                emit_trace,
+                "research_extraction",
+                "warning",
+                "ResearchResult extraction attempt failed validation.",
+                pr_identifier=raw.pr_identifier,
+                attempt=attempt,
+                error=str(exc),
+            )
             retry_instruction = f"Previous output failed validation: {exc}. Return only valid ResearchResult JSON."
 
-    return _fallback_result(
+    result = _fallback_result(
         raw,
         [*notes, f"Solar extraction failed after retry; deterministic fallback used: {last_error}"],
     )
+    _emit_trace(
+        emit_trace,
+        "research_extraction",
+        "fallback",
+        "Using deterministic ResearchResult fallback after retry exhaustion.",
+        pr_identifier=raw.pr_identifier,
+        facts=len(result.facts),
+        search_chunks=len(result.search_chunks),
+        duration_ms=_duration_ms(started_at),
+    )
+    return result
 
 
-def run_researcher(source_url: str, pull_number: int | None = None) -> ResearchResult:
-    bundle = fetch_raw_pr_bundle(source_url, pull_number=pull_number)
-    tool_results, notes = collect_extra_context(bundle)
-    return extract_research_result(bundle.raw, tool_results, notes)
+def run_researcher(
+    source_url: str,
+    pull_number: int | None = None,
+    emit_trace: TraceEmitter | None = None,
+) -> ResearchResult:
+    started_at = time.perf_counter()
+    _emit_trace(
+        emit_trace,
+        "core_pr_data",
+        "started",
+        "Fetching core PR metadata, commits, files, and linked issues.",
+        pull_number=pull_number,
+    )
+    try:
+        bundle = fetch_raw_pr_bundle(source_url, pull_number=pull_number)
+    except Exception as exc:
+        _emit_trace(
+            emit_trace,
+            "core_pr_data",
+            "error",
+            "Failed to fetch core PR data.",
+            error=str(exc),
+            duration_ms=_duration_ms(started_at),
+        )
+        raise
+    _emit_trace(
+        emit_trace,
+        "core_pr_data",
+        "completed",
+        "Core PR data fetched.",
+        pr_identifier=bundle.raw.pr_identifier,
+        owner=bundle.owner,
+        repo=bundle.repo,
+        pull_number=bundle.pull_number,
+        changed_files=len(bundle.raw.files),
+        commits=len(bundle.raw.commits),
+        linked_issues=len(bundle.raw.linked_issues),
+        duration_ms=_duration_ms(started_at),
+    )
+
+    if emit_trace is None:
+        tool_results, notes = collect_extra_context(bundle)
+        result = extract_research_result(bundle.raw, tool_results, notes)
+    else:
+        tool_results, notes = collect_extra_context(bundle, emit_trace=emit_trace)
+        result = extract_research_result(bundle.raw, tool_results, notes, emit_trace=emit_trace)
+
+    _emit_trace(
+        emit_trace,
+        "researcher",
+        "completed",
+        "Researcher Agent run completed.",
+        pr_identifier=result.pr_identifier,
+        facts=len(result.facts),
+        search_chunks=len(result.search_chunks),
+        duration_ms=_duration_ms(started_at),
+    )
+    return result
