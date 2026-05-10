@@ -55,6 +55,7 @@ CODE_BLOCK_RE = re.compile(r"```[\s\S]*?```")
 TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_./#-]*|[0-9]+|[가-힣]{2,}")
 
 GENERATE_DRAFT_SYSTEM_PROMPT = """당신은 시니어 개발자가 신입을 위해 쓰는 기술 블로그 초안 작성자입니다.
+반드시 JSON 객체만 반환합니다. 설명 텍스트나 마크다운 코드 펜스를 붙이지 않습니다.
 
 [강제 규칙]
 1. 아래 [INPUT] 외의 정보를 사용하지 않습니다. 추측하지 않습니다.
@@ -63,6 +64,7 @@ GENERATE_DRAFT_SYSTEM_PROMPT = """당신은 시니어 개발자가 신입을 위
 4. verified_references 안의 URL만 인용합니다.
 5. 결과 섹션은 PR 본문에 측정값이 없으면 관찰 가능한 효과로만 한정합니다.
 6. 출력은 DraftResult JSON 스키마를 따릅니다.
+7. facts의 내용을 자연스러운 한국어 문장으로 풀어 씁니다. raw 파일명·diff 텍스트를 그대로 붙여넣지 않습니다.
 
 [톤]
 - "~했습니다" 중심
@@ -398,27 +400,19 @@ def _format_changed_files(research: ResearchResult) -> str:
 
 
 def _select_code_block(research: ResearchResult) -> str:
-    for file_change in research.changed_files:
-        if not file_change.patch:
-            continue
-        lines = file_change.patch.splitlines()
-        useful_lines = [
-            line
-            for line in lines
-            if line.startswith(("@@", "+", "-", " "))
-            and not line.startswith(("+++", "---"))
-        ]
-        snippet = "\n".join(useful_lines[:28]).strip()
-        if snippet:
-            return f"```diff\n{snippet}\n```"
     if research.changed_functions:
         rows = "\n".join(
-            f"{item.change_kind}: {item.file}::{item.function_name}"
-            for item in research.changed_functions[:8]
+            f"# [{item.change_kind}] {item.file}\n# {item.function_name}: {item.summary}"
+            for item in research.changed_functions[:4]
         )
-    else:
-        rows = "No patch content was provided."
-    return f"```text\n{rows}\n```"
+        return f"```python\n{rows}\n```"
+    if research.changed_files:
+        rows = "\n".join(
+            f"{item.path}  (+{item.additions} / -{item.deletions})"
+            for item in research.changed_files[:6]
+        )
+        return f"```text\n{rows}\n```"
+    return "```text\n변경 내역 정보 없음\n```"
 
 
 def _reference_lines(references: list[Reference]) -> str:
@@ -458,18 +452,10 @@ def _section_body_template(
         )
     if kind == "solution":
         reference_text = _reference_lines(references)
-        reference_paragraph = (
-            f"\n\n검증된 외부 레퍼런스는 다음 범위에서만 인용했습니다.\n\n{reference_text}"
-            if reference_text
-            else ""
-        )
+        reference_paragraph = f"\n\n{reference_text}" if reference_text else ""
         return (
-            "해결 방법은 변경 파일의 실제 diff를 중심으로 정리했습니다. "
-            "코드 블록은 PR에서 제공된 patch 또는 변경 함수 목록을 그대로 요약한 것입니다.\n\n"
             f"{_format_changed_files(research)}\n\n"
-            f"{_select_code_block(research)}\n\n"
-            "위 코드에서는 변경된 위치와 추가된 흐름을 먼저 확인하는 것이 중요했습니다. "
-            "신입 개발자는 파일 경로, 함수 이름, 추가된 라인을 함께 보면서 변경 의도를 좁혀갈 수 있습니다."
+            f"{_select_code_block(research)}"
             f"{reference_paragraph}"
         )
     if kind == "result":
@@ -548,6 +534,15 @@ def _fallback_draft(
     return sanitized
 
 
+def _slim_research(research: ResearchResult) -> dict[str, Any]:
+    """patch 원문 제외 — 토큰 절약용."""
+    d = research.model_dump(mode="json")
+    for f in d.get("changed_files", []):
+        f.pop("patch", None)
+    d.pop("search_chunks", None)
+    return d
+
+
 def build_generate_draft_prompt(
     research: ResearchResult,
     context: ContextResult,
@@ -557,18 +552,20 @@ def build_generate_draft_prompt(
     references = context.verified_references if mode == "full" else []
     payload = {
         "mode": mode,
-        "research": research.model_dump(mode="json"),
+        "research": _slim_research(research),
         "verified_references": [reference.model_dump(mode="json") for reference in references],
         "section_titles": SECTION_TITLES,
         "output_schema": DraftResult.model_json_schema(),
     }
     retry_text = f"\nRetry instruction: {retry_instruction}\n" if retry_instruction else ""
-    return f"""Return DraftResult JSON.
+    return f"""반드시 DraftResult JSON만 반환하세요. 설명 텍스트 없이 JSON 객체만 출력합니다.
 
-Use research.pr_identifier exactly.
-Use only verified_references URLs in cited_references and markdown links.
-When mode is minimal_context, do not cite any external URL.
-The full_markdown field must be the concatenation of the title and all six sections.
+규칙:
+- research.pr_identifier를 그대로 사용합니다.
+- verified_references의 URL만 cited_references와 마크다운 링크에 사용합니다.
+- mode가 minimal_context이면 외부 URL을 인용하지 않습니다.
+- full_markdown은 제목과 6개 섹션을 이어붙인 완성된 마크다운입니다.
+- 각 섹션은 사실(facts)을 자연스러운 문장으로 풀어 씁니다. raw diff 텍스트를 그대로 복사하지 않습니다.
 {retry_text}
 [INPUT]
 {json.dumps(payload, ensure_ascii=False)}
@@ -587,6 +584,7 @@ def call_solar_for_draft(
             {"role": "system", "content": GENERATE_DRAFT_SYSTEM_PROMPT},
             {"role": "user", "content": build_generate_draft_prompt(research, context, mode, retry_instruction)},
         ],
+        response_format={"type": "json_object"},
         temperature=0.3,
     )
     content = completion.choices[0].message.content
@@ -1066,13 +1064,8 @@ def _patch_draft(
 
     solution = section_map["solution"]
     if _count_code_blocks(solution.body_markdown) < 1 and draft.code_block_count < 1:
-        addition = (
-            "아래 코드는 PR에서 확인된 변경 위치를 보여줍니다.\n\n"
-            f"{_select_code_block(research)}\n\n"
-            "코드 블록은 파일 경로와 추가된 라인을 함께 읽기 위한 기준점입니다."
-        )
         section_map["solution"] = solution.model_copy(
-            update={"body_markdown": _append_once(solution.body_markdown, addition)}
+            update={"body_markdown": _append_once(solution.body_markdown, _select_code_block(research))}
         )
 
     for finding in findings:
@@ -1080,23 +1073,13 @@ def _patch_draft(
             statement = finding.suggestion.split(":", 1)[-1].strip() or finding.quote
             target_kind = finding.section_kind or "solution"
             target = section_map.get(target_kind, section_map["solution"])
-            addition = f"추가로 PR에서 확인된 사실은 다음과 같습니다.\n\n- {statement}"
             if not _fact_is_represented(
                 FactBullet(statement=statement, source="diff", source_locator="reflection_patch"),
                 target.body_markdown,
             ):
                 section_map[target.kind] = target.model_copy(
-                    update={"body_markdown": _append_once(target.body_markdown, addition)}
+                    update={"body_markdown": _append_once(target.body_markdown, f"- {statement}")}
                 )
-        elif finding.kind == "code_under_explained":
-            target = section_map.get(finding.section_kind or "solution", section_map["solution"])
-            explanation = (
-                "코드 블록을 읽을 때는 먼저 파일 경로와 함수 이름을 확인하고, "
-                "그 다음 추가된 라인이 어떤 흐름을 바꾸는지 확인했습니다."
-            )
-            section_map[target.kind] = target.model_copy(
-                update={"body_markdown": _append_once(target.body_markdown, explanation)}
-            )
 
     if effective_mode == "minimal_context":
         outro = section_map["outro"]
