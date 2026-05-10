@@ -13,15 +13,13 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "../../.env"))
 
 from orchestration.graph import prscribe_graph
 
-PR_URL = "https://github.com/soma17th-ai54/prscribe/pull/4"
 
-
-async def main():
-    print(f"🚀 파이프라인 시작: {PR_URL}")
+async def main(pr_url: str):
+    print(f"🚀 파이프라인 시작: {pr_url}")
     print("  GitHub API → Researcher → Context → Writer ...\n")
 
     result = await prscribe_graph.ainvoke(
-        {"pr_url": PR_URL},
+        {"pr_url": pr_url},
         config={"recursion_limit": 50},
     )
 
@@ -71,4 +69,9 @@ async def main():
         print("\n⚠️  draft 없음 — writer 실패 또는 에러 확인")
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python run_demo.py <PR_URL>")
+        print("  e.g. python run_demo.py https://github.com/owner/repo/pull/123")
+        sys.exit(1)
+    asyncio.run(main(sys.argv[1]))
