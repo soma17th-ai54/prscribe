@@ -837,6 +837,7 @@ dependencies = [
     { name = "langgraph" },
     { name = "prscribe-context-agent" },
     { name = "prscribe-researcher-agent" },
+    { name = "prscribe-writer-agent" },
     { name = "python-dotenv" },
 ]
 
@@ -851,6 +852,7 @@ requires-dist = [
     { name = "langgraph", specifier = ">=1.0.0" },
     { name = "prscribe-context-agent", editable = "services/context_agent" },
     { name = "prscribe-researcher-agent", editable = "services/researcher_agent" },
+    { name = "prscribe-writer-agent", editable = "services/writer_agent" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
 ]
 
