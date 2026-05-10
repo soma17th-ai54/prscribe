@@ -57,8 +57,12 @@ async def writer_node(state: GraphState) -> dict:
         return {"errors": state.get("errors", []) + ["research is missing"]}
 
     context_dict = state.get("context")
-    coverage = (context_dict or {}).get("coverage", 0.0)
-    mode = "minimal_context" if coverage < 0.2 else "full"
+    override = state.get("mode_override")
+    if override in ("full", "minimal_context"):
+        mode = override
+    else:
+        coverage = (context_dict or {}).get("coverage", 0.0)
+        mode = "minimal_context" if coverage < 0.2 else "full"
 
     try:
         result = await asyncio.to_thread(
