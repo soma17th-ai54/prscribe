@@ -13,6 +13,14 @@ from writer_agent.agents.writer import run_writer_pipeline
 from orchestration.state import GraphState
 
 
+def _new_trace_events(state: GraphState, result: dict) -> list[dict]:
+    previous_traces = list(state.get("react_traces", []) or [])
+    returned_traces = list(result.get("react_traces", []) or [])
+    if returned_traces[: len(previous_traces)] == previous_traces:
+        return returned_traces[len(previous_traces):]
+    return returned_traces
+
+
 async def researcher_node(state: GraphState) -> dict:
     pr_url = state.get("pr_url", "")
     pr_number = state.get("pr_number")
@@ -51,22 +59,19 @@ async def context_node(state: GraphState) -> dict:
     adapter.react_traces = state.get("react_traces", [])
 
     result = await _context_node(adapter)
+    new_traces = _new_trace_events(state, result)
 
     if "context" in result:
         ctx: ContextResult = result["context"]
-        previous_traces = list(state.get("react_traces", []) or [])
-        returned_traces = list(result.get("react_traces", []) or [])
-        new_traces = (
-            returned_traces[len(previous_traces):]
-            if returned_traces[: len(previous_traces)] == previous_traces
-            else returned_traces
-        )
         output = {
             "context": ctx.model_dump(mode="json"),
         }
         if new_traces:
             output["react_traces"] = new_traces
         return output
+    if new_traces:
+        result = dict(result)
+        result["react_traces"] = new_traces
     return result
 
 

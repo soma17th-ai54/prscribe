@@ -1,25 +1,51 @@
-import os
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from context_agent.models import ContextResult, ContextSelfEval, ResearchResult
 from context_agent.prompts import SELF_EVAL_SYSTEM_PROMPT
+from context_agent.solar import solar_api_key
+
+TraceEmitter = Callable[[dict[str, Any]], None]
 
 
 def get_solar_mini() -> ChatOpenAI:
     return ChatOpenAI(
         model="solar-mini",
         base_url="https://api.upstage.ai/v1",
-        api_key=os.environ["SOLAR_API_KEY"],
+        api_key=solar_api_key(),
         temperature=0,
+    )
+
+
+def _emit_self_eval_trace(
+    emit_trace: TraceEmitter | None,
+    status: str,
+    message: str,
+    **metadata: Any,
+) -> None:
+    if emit_trace is None:
+        return
+    emit_trace(
+        {
+            "node": "context",
+            "stage": "context_self_eval",
+            "status": status,
+            "message": message,
+            "metadata": {
+                key: value
+                for key, value in metadata.items()
+                if value is not None
+            },
+        }
     )
 
 
 async def run_self_eval(
     context_result: ContextResult,
     research_result: ResearchResult,
+    emit_trace: TraceEmitter | None = None,
 ) -> Optional[ContextSelfEval]:
     """ContextSelfEval 생성. 실패 시 None 반환 (노드 자체는 정상 반환)."""
     try:
@@ -55,5 +81,15 @@ async def run_self_eval(
             result = result.model_copy(update={"confidence": 2})
 
         return result
-    except Exception:
+    except Exception as exc:
+        _emit_self_eval_trace(
+            emit_trace,
+            "warning",
+            "Context self-evaluation failed; continuing without self_eval.",
+            pr_identifier=context_result.pr_identifier,
+            exception_type=type(exc).__name__,
+            error=str(exc),
+            coverage=context_result.coverage,
+            verified_references=len(context_result.verified_references),
+        )
         return None
