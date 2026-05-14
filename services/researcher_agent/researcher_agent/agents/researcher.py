@@ -46,6 +46,13 @@ Extract only facts directly supported by PR diff, commit messages, linked issues
 Do not infer motivation, performance, business impact, or implementation details that are not visible.
 Use unified diff semantics: lines starting with + are added and lines starting with - are removed.
 Return valid JSON only, matching ResearchResult.
+
+search_chunks.keywords rules:
+- Use library names, API concepts, error types, and domain terms that would return useful results in a web search.
+- Do NOT use function names (e.g. test_*, validate_*, def-style identifiers).
+- Do NOT use file paths, module paths, or snake_case identifiers copied verbatim from the diff.
+- Good examples: "Pydantic field validation", "FastAPI query parameter", "pytest parametrize"
+- Bad examples: "test_invalid_filter_values_raise_validation_error", "services/api/filters.py"
 """
 
 SELF_EVAL_SYSTEM_PROMPT = """You are the verifier persona for the PRScribe Researcher Agent (a separate persona from the extractor).
