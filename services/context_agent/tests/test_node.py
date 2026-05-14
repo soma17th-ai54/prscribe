@@ -49,6 +49,7 @@ async def test_context_node_returns_context_result():
     assert "context" in result
     assert result["context"].coverage == 0.5
     assert result["context"].self_eval.confidence == 4
+    assert any(event["stage"] == "context_self_eval" for event in result["react_traces"])
 
 
 @pytest.mark.asyncio
@@ -72,3 +73,23 @@ async def test_context_node_self_eval_failure_does_not_crash():
 
     assert "context" in result
     assert result["context"].self_eval is None
+
+
+@pytest.mark.asyncio
+async def test_context_self_eval_failure_emits_reason():
+    events = []
+
+    with patch("context_agent.self_eval.get_solar_mini", side_effect=RuntimeError("solar schema error")):
+        from context_agent.self_eval import run_self_eval
+        result = await run_self_eval(
+            _make_context_result(),
+            _make_research(),
+            emit_trace=events.append,
+        )
+
+    assert result is None
+    assert events
+    assert events[-1]["stage"] == "context_self_eval"
+    assert events[-1]["status"] == "warning"
+    assert events[-1]["metadata"]["exception_type"] == "RuntimeError"
+    assert "solar schema error" in events[-1]["metadata"]["error"]
