@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import streamlit as st
@@ -182,6 +183,43 @@ def _render_researcher_card(se: dict | None) -> None:
         rationale = se.get("rationale")
         if rationale:
             st.caption(rationale)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Agent trace
+# ──────────────────────────────────────────────────────────────────────────
+def format_trace_event(event: dict) -> str:
+    stage = event.get("stage") or event.get("node") or "agent"
+    status = event.get("status") or "info"
+    message = event.get("message") or ""
+    if message:
+        return f"`{stage}` · {status} — {message}"
+    return f"`{stage}` · {status}"
+
+
+def render_trace_updates(events: list[dict], limit: int = 4) -> None:
+    if not events:
+        return
+    for event in events[-limit:]:
+        st.caption(format_trace_event(event))
+
+
+def render_agent_trace(state: dict) -> None:
+    events = list(state.get("react_traces") or [])
+    if not events:
+        st.info("표시할 Agent trace가 아직 없습니다.")
+        return
+
+    st.caption(f"총 {len(events)}개 trace event")
+    for index, event in enumerate(events, start=1):
+        title = format_trace_event(event)
+        with st.expander(f"{index}. {title}", expanded=index == len(events)):
+            metadata = event.get("metadata")
+            if metadata:
+                st.json(metadata)
+            else:
+                st.caption("metadata 없음")
+            st.code(json.dumps(event, ensure_ascii=False, indent=2), language="json")
 
 
 # ──────────────────────────────────────────────────────────────────────────

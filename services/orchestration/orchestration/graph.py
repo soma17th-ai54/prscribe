@@ -16,13 +16,23 @@ from orchestration.state import GraphState
 async def researcher_node(state: GraphState) -> dict:
     pr_url = state.get("pr_url", "")
     pr_number = state.get("pr_number")
+    trace_events: list[dict] = []
     try:
         result: ResearchResult = await asyncio.to_thread(
-            run_researcher, pr_url, pr_number
+            run_researcher,
+            pr_url,
+            pr_number,
+            emit_trace=trace_events.append,
         )
-        return {"research": result.model_dump(mode="json")}
+        return {
+            "research": result.model_dump(mode="json"),
+            "react_traces": trace_events,
+        }
     except Exception as e:
-        return {"errors": state.get("errors", []) + [str(e)]}
+        return {
+            "errors": state.get("errors", []) + [str(e)],
+            "react_traces": trace_events,
+        }
 
 
 async def context_node(state: GraphState) -> dict:
@@ -44,10 +54,19 @@ async def context_node(state: GraphState) -> dict:
 
     if "context" in result:
         ctx: ContextResult = result["context"]
-        return {
+        previous_traces = list(state.get("react_traces", []) or [])
+        returned_traces = list(result.get("react_traces", []) or [])
+        new_traces = (
+            returned_traces[len(previous_traces):]
+            if returned_traces[: len(previous_traces)] == previous_traces
+            else returned_traces
+        )
+        output = {
             "context": ctx.model_dump(mode="json"),
-            "react_traces": result.get("react_traces", []),
         }
+        if new_traces:
+            output["react_traces"] = new_traces
+        return output
     return result
 
 

@@ -28,6 +28,19 @@ for _k, _v in _DEFAULTS.items():
     st.session_state.setdefault(_k, _v)
 
 
+_LIST_MERGE_KEYS = ("errors", "react_traces", "verifications")
+
+
+def _merge_partial_state(current: dict, partial: dict | None) -> dict:
+    merged = dict(current)
+    for key, value in (partial or {}).items():
+        if key in _LIST_MERGE_KEYS and key in merged:
+            merged[key] = list(merged[key]) + list(value or [])
+        else:
+            merged[key] = value
+    return merged
+
+
 # ── sidebar ─────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ 설정")
@@ -111,13 +124,16 @@ if st.session_state["status"] == "running":
             kind = event[0]
             if kind == "node_update":
                 _, node_name, partial = event
-                merged = {**st.session_state["graph_state"], **(partial or {})}
-                st.session_state["graph_state"] = merged
+                st.session_state["graph_state"] = _merge_partial_state(
+                    st.session_state["graph_state"],
+                    partial,
+                )
                 st.session_state["current_step"] = max(
                     st.session_state["current_step"],
                     NODE_TO_STEP.get(node_name, 0),
                 )
                 status.update(label=f"단계: **{node_name}** 완료")
+                components.render_trace_updates((partial or {}).get("react_traces") or [])
                 with progress_slot.container():
                     components.render_progress(st.session_state["current_step"])
             elif kind == "done":
@@ -152,9 +168,13 @@ if st.session_state["status"] in {"done", "error"}:
     state = st.session_state["graph_state"]
     components.render_progress(st.session_state["current_step"])
 
-    tab_draft, tab_eval, tab_err = st.tabs(["📝 초안", "🎯 Self-Eval", "🐞 Errors"])
+    tab_draft, tab_trace, tab_eval, tab_err = st.tabs(
+        ["📝 초안", "Agent Trace", "🎯 Self-Eval", "🐞 Errors"]
+    )
     with tab_draft:
         components.render_draft(state.get("draft"))
+    with tab_trace:
+        components.render_agent_trace(state)
     with tab_eval:
         components.render_self_eval_cards(state)
     with tab_err:
