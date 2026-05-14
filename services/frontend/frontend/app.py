@@ -53,7 +53,7 @@ with st.sidebar:
     solar_key = st.text_input(
         "Solar API Key",
         type="password",
-        value=os.getenv("UPSTAGE_API_KEY", ""),
+        value=os.getenv("UPSTAGE_API_KEY") or os.getenv("SOLAR_API_KEY", ""),
         help="Researcher / Context / Writer 모두 사용",
     )
     mode_choice = st.selectbox(
@@ -68,6 +68,7 @@ if gh_token:
     os.environ["GITHUB_TOKEN"] = gh_token
 if solar_key:
     os.environ["UPSTAGE_API_KEY"] = solar_key
+    os.environ["SOLAR_API_KEY"] = solar_key
 
 
 # ── header ──────────────────────────────────────────────────────────

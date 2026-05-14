@@ -1,7 +1,13 @@
 """End-to-end pipeline demo: researcher → context → writer"""
 import asyncio
+import json
 import sys
 import os
+import warnings
+
+from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
+
+warnings.filterwarnings("ignore", category=LangChainPendingDeprecationWarning)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../services/researcher_agent"))
@@ -13,15 +19,39 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "../../.env"))
 
 from orchestration.graph import prscribe_graph
 
+_LIST_MERGE_KEYS = ("errors", "react_traces", "verifications")
+PIPELINE_RECURSION_LIMIT = 5
+
+
+def _merge_state(accumulated: dict, partial: dict) -> None:
+    for key, value in partial.items():
+        if key in _LIST_MERGE_KEYS and key in accumulated:
+            accumulated[key] = list(accumulated[key]) + list(value or [])
+        else:
+            accumulated[key] = value
+
+
+def _print_trace(node_name: str, partial: dict) -> None:
+    print(f"[backend] node_update node={node_name} keys={sorted(partial.keys())}", flush=True)
+    for event in partial.get("react_traces", []) or []:
+        payload = {"langgraph_node": node_name, **event}
+        print(f"[backend] trace {json.dumps(payload, ensure_ascii=False)}", flush=True)
+
 
 async def main(pr_url: str):
     print(f"🚀 파이프라인 시작: {pr_url}")
     print("  GitHub API → Researcher → Context → Writer ...\n")
 
-    result = await prscribe_graph.ainvoke(
+    result = {"pr_url": pr_url}
+    async for update in prscribe_graph.astream(
         {"pr_url": pr_url},
-        config={"recursion_limit": 50},
-    )
+        config={"recursion_limit": PIPELINE_RECURSION_LIMIT},
+        stream_mode="updates",
+    ):
+        for node_name, partial in update.items():
+            partial = partial or {}
+            _merge_state(result, partial)
+            _print_trace(node_name, partial)
 
     errors = result.get("errors", [])
     if errors:

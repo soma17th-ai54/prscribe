@@ -1,5 +1,4 @@
 import json
-import os
 from typing import Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -7,12 +6,14 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
+from context_agent.solar import solar_api_key
+
 
 def get_solar_mini() -> ChatOpenAI:
     return ChatOpenAI(
         model="solar-mini",
         base_url="https://api.upstage.ai/v1",
-        api_key=os.environ["SOLAR_API_KEY"],
+        api_key=solar_api_key(),
         temperature=0,
     )
 
